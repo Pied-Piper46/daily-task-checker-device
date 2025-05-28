@@ -12,19 +12,30 @@
 
 ### 2.1. システム構成図
 ```mermaid
+graph TD
+    subgraph 外部ネットワーク
+        Internet[インターネット]
+    end
 
-[IoTデバイス (ESP32)] <--- Wi-Fi ---> [Wi-Fiルーター] <---> [インターネット]
-^
-| (HTTP/API)
-v
-[APIサーバー (FastAPI on Your Server)]
-^ |
-| | (SQLite)
-| v
-| [データベース]
-|
-[ダッシュボード (Web Browser)]
+    subgraph ローカルネットワーク
+        IoT_Device[IoTデバイス ESP32]
+        Router[Wi-Fiルーター]
+    end
 
+    subgraph サーバーサイド
+        API_Server[APIサーバー FastAPI]
+        Database[データベース]
+    end
+
+    subgraph クライアントサイド
+        Dashboard[ダッシュボード]
+    end
+
+    IoT_Device -- "Wi-Fi" --- Router
+    Router --- Internet
+    Internet -- "HTTP/API" --> API_Server
+    API_Server -- "SQLite" --> Database
+    API_Server -- "HTTP/API" --> Dashboard
 ```
 
 
