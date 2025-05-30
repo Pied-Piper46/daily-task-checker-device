@@ -30,12 +30,18 @@ const int CENTER_X = 2;
 const int CENTER_Y = 2;
 
 // --- Animation Configuration ---
-const unsigned long SUCCESS_EFFECT_DURATION = 2000;
+const unsigned long SUCCESS_EFFECT_DURATION = 1000;
 const unsigned long API_CONNECTING_PULSE_PERIOD = 1000;
 const float MAX_RADIUS = 2.5f;
 
 // --- Loop Configuration ---
 const unsigned long LOOP_DELAY_MS = 100;
+
+// --- API Retry Configuration ---
+const int MAX_API_UPDATE_RETRIES = 3;
+const unsigned long API_UPDATE_RETRY_INTERVAL_MS = 3000;
+volatile int errorRetryAttemptCount = 0;
+volatile unsigned long lastApiRetryAttemptTime = 0;
 
 // --- NTP Setting ---
 const char* ntpServer = "pool.ntp.org";
@@ -96,6 +102,7 @@ void startApiConnectingAnimation();
 void apiTaskFunction(void *pvParameters);
 bool updateTaskOnApi(const char* deviceId, bool isCompleted);
 bool getInitialTaskState(const char* deviceId, bool &isCompletedResult);
+bool ensureWiFiConnected(int maxAttempts = 3, int delayPerAttemptMs = 2000);
 
 // --- Setup ---
 void setup() {
@@ -109,8 +116,8 @@ void setup() {
   Serial.println(ssid);
   WiFi.begin(ssid, password);
   int attempt = 0;
-  while (WiFi.status() != WL_CONNECTED && attempt < 20) {
-    delay(400);
+  while (WiFi.status() != WL_CONNECTED && attempt < 100) {
+    delay(200);
     Serial.print(".");
     attempt++;
     M5.dis.fillpix((attempt % 2 == 0) ? COLOR_INITIALIZING : COLOR_OFF);
@@ -190,6 +197,7 @@ void loop() {
       } else {
         Serial.println("API Update failed (from API task)");
         currentState = DeviceState::ERROR_RETRYING;
+        errorRetryAttemptCount = 0;
         animationStartTime = currentTime;
       }
     }
@@ -200,24 +208,33 @@ void loop() {
   if (M5.Btn.wasPressed() && apiTaskHandle != NULL && !apiRequestPending) {
     Serial.println("Button Pressed!");
     if (currentState == DeviceState::TASK_PENDING) {
-      newTargetTaskState = true; // completed
+      newTargetTaskState = true; // DONE
       apiRequestPending = true;
       currentState = DeviceState::API_REQUEST_PENDING;
-      Serial.println("Requesting API to set task to COMPLETED.");
+      Serial.println("Requesting API to set task to DONE.");
     } else if (currentState == DeviceState::TASK_COMPLETED) {
-      newTargetTaskState = false; // pending
+      newTargetTaskState = false; // NOT_DONE
       apiRequestPending = true;
       currentState = DeviceState::API_REQUEST_PENDING;
       Serial.println("Requesting API to set task to PENDING.");
     } else if (currentState == DeviceState::ERROR_FAILED || currentState == DeviceState::ERROR_RETRYING) {
-      Serial.println("Attempting to recover from error state (re-fetch initial)...");
-      // WiFi reconnecting, NTP syncing if needed
-      // try to get initial state in this time
-      bool fetchedState = false;
-      if (getInitialTaskState(DEVICE_ID, fetchedState)) {
-        currentState = fetchedState ? DeviceState::TASK_COMPLETED : DeviceState::TASK_PENDING;
+      Serial.println("Attempting to recover from error...");
+      DeviceState stateBeforeRecoveryAttempt = currentState;
+
+      if (ensureWiFiConnected()) {
+        Serial.println("WiFi connected. Attempting to fetch initial task state from API...");
+        bool fetchedState = false;
+        if (getInitialTaskState(DEVICE_ID, fetchedState)) {
+          currentState = fetchedState ? DeviceState::TASK_COMPLETED : DeviceState::TASK_PENDING;
+          if (stateBeforeRecoveryAttempt == DeviceState::ERROR_RETRYING) {
+            errorRetryAttemptCount = 0;
+          }
+        } else {
+          currentState = DeviceState::ERROR_FAILED;
+        }
       } else {
         currentState = DeviceState::ERROR_FAILED;
+        Serial.println("WiFI reconnection failed. Cannot recover task state.");
       }
     }
   }
@@ -229,12 +246,23 @@ void loop() {
   }
 
   // Change state logic (time base)
-  if (currentState == DeviceState::EFFECT_SUCCESS && (currentTime - animationStartTime > 2000)) {
+  if (currentState == DeviceState::EFFECT_SUCCESS && (currentTime - animationStartTime > SUCCESS_EFFECT_DURATION)) {
     currentState = newTargetTaskState ? DeviceState::TASK_COMPLETED : DeviceState::TASK_PENDING;
   }
-  if (currentState == DeviceState::ERROR_RETRYING && (currentTime - animationStartTime > 5000)) {
-    Serial.println("Error retry timeout. Changing to ERROR_FAILED.");
-    currentState = DeviceState::ERROR_FAILED;
+  if (currentState == DeviceState::ERROR_RETRYING) {
+    if (errorRetryAttemptCount < MAX_API_UPDATE_RETRIES) {
+      if (currentTime - lastApiRetryAttemptTime >= API_UPDATE_RETRY_INTERVAL_MS) {
+        Serial.println("Retrying API update...");
+        apiRequestPending = true;
+        currentState = DeviceState::API_REQUEST_PENDING;
+
+        lastApiRetryAttemptTime = currentTime;
+        errorRetryAttemptCount++;
+      }
+    } else {
+      Serial.println("All API update retries failed. Changing to ERROR_FAILED.");
+      currentState = DeviceState::ERROR_FAILED;
+    }
   }
 
   // Reset state at 0:01 AM (JST, UTC 15:01)
@@ -339,19 +367,19 @@ bool updateTaskOnApi(const char* deviceId, bool isCompleted) {
   bool success = false;
 
   if (httpResponseCode > 0) {
-    Serial.print("API PUT Response code: ");
+    Serial.print("API POST Response code: ");
     Serial.println(httpResponseCode);
     String responsePayload = http.getString();
-    Serial.print("API PUT Response payload: ");
+    Serial.print("API POST Response payload: ");
     Serial.println(responsePayload);
     if (httpResponseCode == 200 || httpResponseCode == 201) {
       success = true;
     } else {
-      Serial.print("API PUT Error: ");
+      Serial.print("API POST Error: ");
       Serial.println(http.errorToString(httpResponseCode).c_str());
     }
   } else {
-    Serial.print("API PUT Error on send: ");
+    Serial.print("API POST Error on send: ");
     Serial.println(http.errorToString(httpResponseCode).c_str());
   }
 
@@ -401,6 +429,36 @@ bool getInitialTaskState(const char* deviceId, bool &isCompletedResult) {
   }
   http.end();
   return success;
+}
+
+
+// --- WiFi Reconnection Function ---
+bool ensureWiFiConnected(int maxAttempts, int delayPerAttemptMs) {
+  if (WiFi.status() == WL_CONNECTED) {
+    return true;
+  }
+
+  Serial.println("WiFi not connected. Attempting to reconnect");
+  WiFi.disconnect();
+  delay(100);
+  WiFi.begin(ssid, password);
+
+  for (int attempt = 0; attempt < maxAttempts; ++attempt) {
+    unsigned long singleAttemptStartTime = millis();
+    while (millis() - singleAttemptStartTime < (unsigned long)delayPerAttemptMs) {
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("WiFi reconnected successfully.");
+        return true;
+      }
+      delay(250);
+    }
+    if (WiFi.status() == WL_CONNECTED) { // in case that connected in a few delay
+      Serial.println("WiFi reconnected successfully.");
+      return true;
+    }
+  }
+  Serial.println("WiFi reconnection failed after all attempts.");
+  return false;
 }
 
 
