@@ -14,7 +14,7 @@ const char* password = "42r797a43a58";
 #define USE_PRODUCTION_API 0 // 0: dev, 1: pro
 
 #if USE_PRODUCTION_API
-  const char* API_BASE_URL = "https://daily-task-checker.vercel.app";
+  const char* API_BASE_URL = "https://daily-task-checker.vercel.app/api";
   // TODO: route authentication
 #else
   const char* API_BASE_URL = "http://192.168.1.35:3000/api";
@@ -30,12 +30,12 @@ const int CENTER_X = 2;
 const int CENTER_Y = 2;
 
 // --- Animation Configuration ---
-const unsigned long SUCCESS_EFFECT_DURATION = 5000; // 5 seconds
-const unsigned long API_CONNECTING_PULSE_PERIOD = 2000; // 2 seconds for full pulse cycle
-const float MAX_RADIUS = 2.5f; // Maximum radius for 5x5 display
+const unsigned long SUCCESS_EFFECT_DURATION = 2000;
+const unsigned long API_CONNECTING_PULSE_PERIOD = 1000;
+const float MAX_RADIUS = 2.5f;
 
 // --- Loop Configuration ---
-const unsigned long LOOP_DELAY_MS = 50; // Reduced from 100ms for smoother animations
+const unsigned long LOOP_DELAY_MS = 100;
 
 // --- NTP Setting ---
 const char* ntpServer = "pool.ntp.org";
@@ -61,8 +61,8 @@ DeviceState previousDisplayState = DeviceState::INITIALIZING;
 
 // -- LED Color Definition ---
 CRGB COLOR_PENDING = CRGB::Red;
-CRGB COLOR_API_CONNECTING = CRGB::White;
-CRGB COLOR_SUCCESS_EFFECT = CRGB::Green;
+CRGB COLOR_API_CONNECTING = CRGB::BlueViolet;
+CRGB COLOR_SUCCESS_EFFECT = CRGB::White;
 CRGB COLOR_COMPLETED = CRGB::Green;
 CRGB COLOR_ERROR = CRGB::Orange;
 CRGB COLOR_OFF = CRGB::Black;
@@ -80,7 +80,7 @@ volatile bool apiResultReceived = false;
 
 // --- Midnight Reset Control ---
 volatile bool midnightResetExecuted = false;
-int lastResetDay = -1; // Track the last day when reset was executed
+int lastResetDay = -1;
 
 // --- Prototype Declaration ---
 void updateDisplay();
@@ -110,7 +110,7 @@ void setup() {
   WiFi.begin(ssid, password);
   int attempt = 0;
   while (WiFi.status() != WL_CONNECTED && attempt < 20) {
-    delay(500);
+    delay(400);
     Serial.print(".");
     attempt++;
     M5.dis.fillpix((attempt % 2 == 0) ? COLOR_INITIALIZING : COLOR_OFF);
@@ -120,8 +120,8 @@ void setup() {
     Serial.println("\nWiFi connected");
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
-    M5.dis.fillpix(CRGB::Green);
-    delay(2000);
+    // M5.dis.fillpix(CRGB::Green);
+    delay(200);
 
     // NTP Client Initialization & Sync time
     timeClient.begin();
@@ -130,12 +130,12 @@ void setup() {
       Serial.println("Time synced successfully!");
       Serial.println("Current UTC Time: ");
       Serial.println(timeClient.getFormattedTime());
-      M5.dis.fillpix(CRGB::Blue);
-      delay(2000);
+      // M5.dis.fillpix(CRGB::Blue);
+      delay(200);
     } else {
       Serial.println("Time sync failed.");
       M5.dis.fillpix((CRGB::Magenta));
-      delay(2000);
+      delay(200);
     }
 
     // Create API Connection Task
@@ -229,7 +229,7 @@ void loop() {
   }
 
   // Change state logic (time base)
-  if (currentState == DeviceState::EFFECT_SUCCESS && (currentTime - animationStartTime > SUCCESS_EFFECT_DURATION)) {
+  if (currentState == DeviceState::EFFECT_SUCCESS && (currentTime - animationStartTime > 2000)) {
     currentState = newTargetTaskState ? DeviceState::TASK_COMPLETED : DeviceState::TASK_PENDING;
   }
   if (currentState == DeviceState::ERROR_RETRYING && (currentTime - animationStartTime > 5000)) {
@@ -237,7 +237,7 @@ void loop() {
     currentState = DeviceState::ERROR_FAILED;
   }
 
-  // Reset state at 0:01 AM (JST, UTC 15:01) - Execute only once per day
+  // Reset state at 0:01 AM (JST, UTC 15:01)
   if (WiFi.status() == WL_CONNECTED && timeClient.isTimeSet()) {
     int currentDay = timeClient.getDay();
     if (timeClient.getHours() == 15 && timeClient.getMinutes() == 1 && timeClient.getSeconds() < 10) {
@@ -250,10 +250,7 @@ void loop() {
         lastResetDay = currentDay;
       }
     } else {
-      // Reset the flag when we're outside the reset time window
-      if (timeClient.getHours() != 15 || timeClient.getMinutes() != 1) {
-        midnightResetExecuted = false;
-      }
+      midnightResetExecuted = false;
     }
   }
 
@@ -414,25 +411,32 @@ void updateDisplay() {
 
   switch (currentState) {
     case DeviceState::INITIALIZING:
+      Serial.println("Called drawInitializing!");
       drawInitializing(currentTime);
       break;
     case DeviceState::TASK_PENDING:
+      Serial.println("Called drawTaskPending!");
       drawTaskPending();
       break;
     case DeviceState::API_CONNECTING:
     case DeviceState::API_REQUEST_PENDING:
+      Serial.println("Called drawApiConnecting!");
       drawApiConnecting(currentTime);
       break;
     case DeviceState::EFFECT_SUCCESS:
+      Serial.println("Called drawEffectSuccess!");
       drawEffectSuccess(currentTime);
       break;
     case DeviceState::TASK_COMPLETED:
+      Serial.println("Called drawTaskCompleted!");
       drawTaskCompleted();
       break;
     case DeviceState::ERROR_RETRYING:
+      Serial.println("Called drawErrorRetrying!");
       drawErrorRetrying(currentTime);
       break;
     case DeviceState::ERROR_FAILED:
+      Serial.println("Called drawErrorFailed!");
       drawErrorFailed();
       break;
   }
@@ -457,8 +461,8 @@ void startApiConnectingAnimation() {
 void drawApiConnecting(unsigned long currentTime) {
   unsigned long elapsed = currentTime - animationStartTime;
   float progress = (float)(elapsed % API_CONNECTING_PULSE_PERIOD) / API_CONNECTING_PULSE_PERIOD;
-  
-  // Create pulsing concentric circles
+  if (progress > 1.0) progress = 1.0;
+
   float currentRadius = MAX_RADIUS * (0.3f + 0.7f * (0.5f + 0.5f * sin(2 * PI * progress)));
 
   M5.dis.clear();
@@ -467,7 +471,6 @@ void drawApiConnecting(unsigned long currentTime) {
     for (int x = 0; x < DISPLAY_WIDTH; x++) {
       float dist = sqrt(pow(x - CENTER_X, 2) + pow(y - CENTER_Y, 2));
       if (dist <= currentRadius) {
-        // Create brightness based on distance for better effect
         float brightness = 1.0f - (dist / currentRadius) * 0.5f;
         CRGB color = COLOR_API_CONNECTING;
         color.r = (uint8_t)(color.r * brightness);
@@ -487,22 +490,19 @@ void drawEffectSuccess(unsigned long currentTime) {
   float progress = (float)(currentTime - animationStartTime) / SUCCESS_EFFECT_DURATION;
   if (progress > 1.0) progress = 1.0;
 
-  // Create expanding concentric circles with multiple rings
   M5.dis.clear();
-  
-  // Multiple expanding rings for better visual effect
+
   for (int ring = 0; ring < 3; ring++) {
-    float ringDelay = ring * 0.3f; // Stagger the rings
+    float ringDelay = ring * 0.3f;
     float ringProgress = progress - ringDelay;
     if (ringProgress > 0 && ringProgress < 1.0f) {
       float currentRadius = MAX_RADIUS * ringProgress;
       float ringThickness = 0.8f;
-      
+
       for (int y = 0; y < DISPLAY_HEIGHT; y++) {
         for (int x = 0; x < DISPLAY_WIDTH; x++) {
           float dist = sqrt(pow(x - CENTER_X, 2) + pow(y - CENTER_Y, 2));
           if (dist <= currentRadius && dist >= (currentRadius - ringThickness)) {
-            // Fade effect based on ring progress
             float brightness = 1.0f - ringProgress * 0.3f;
             CRGB color = COLOR_SUCCESS_EFFECT;
             color.r = (uint8_t)(color.r * brightness);
