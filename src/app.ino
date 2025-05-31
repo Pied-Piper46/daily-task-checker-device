@@ -194,11 +194,18 @@ void loop() {
         Serial.println("API Update successful (from API task)");
         currentState = DeviceState::EFFECT_SUCCESS;
         startSuccessEffect();
+        // errorRetryAttemptCount can be reset on success if desired,
+        // though it's primarily reset when a new sequence begins.
+        // errorRetryAttemptCount = 0; 
       } else {
-        Serial.println("API Update failed (from API task)");
+        Serial.println("API Update failed (from API task). Entering ERROR_RETRYING.");
         currentState = DeviceState::ERROR_RETRYING;
-        errorRetryAttemptCount = 0;
-        animationStartTime = currentTime;
+        // DO NOT reset errorRetryAttemptCount here. It's reset when a new API sequence
+        // is initiated (e.g., by button press or midnight reset) and incremented
+        // by the ERROR_RETRYING state logic.
+        lastApiRetryAttemptTime = currentTime; // Set base time for the first retry interval.
+        // animationStartTime = currentTime; // This is not strictly needed for the new retry logic
+                                         // as drawErrorRetrying doesn't use it.
       }
     }
     apiResultReceived = false;
@@ -210,15 +217,18 @@ void loop() {
     if (currentState == DeviceState::TASK_PENDING) {
       newTargetTaskState = true; // DONE
       apiRequestPending = true;
+      errorRetryAttemptCount = 0; // Reset retry counter for new API update sequence
       currentState = DeviceState::API_REQUEST_PENDING;
       Serial.println("Requesting API to set task to DONE.");
     } else if (currentState == DeviceState::TASK_COMPLETED) {
       newTargetTaskState = false; // NOT_DONE
       apiRequestPending = true;
+      errorRetryAttemptCount = 0; // Reset retry counter for new API update sequence
       currentState = DeviceState::API_REQUEST_PENDING;
       Serial.println("Requesting API to set task to PENDING.");
     } else if (currentState == DeviceState::ERROR_FAILED || currentState == DeviceState::ERROR_RETRYING) {
       Serial.println("Attempting to recover from error...");
+      // errorRetryAttemptCount is NOT reset here for a recovery attempt.
       DeviceState stateBeforeRecoveryAttempt = currentState;
 
       if (ensureWiFiConnected()) {
@@ -273,6 +283,7 @@ void loop() {
         Serial.println("Midnight reset! Setting task to PENDING.");
         newTargetTaskState = false;
         apiRequestPending = true;
+        errorRetryAttemptCount = 0; // Reset retry counter for new API update sequence
         currentState = DeviceState::API_REQUEST_PENDING;
         midnightResetExecuted = true;
         lastResetDay = currentDay;
