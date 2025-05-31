@@ -5,13 +5,14 @@
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <time.h>
+#include "certificates.h"
 
 // --- WiFi Setting ---
 const char* ssid = "elecom-29fffc";
 const char* password = "42r797a43a58";
 
 // --- API Setting ---
-#define USE_PRODUCTION_API 0 // 0: dev, 1: pro
+#define USE_PRODUCTION_API 1 // 0: dev, 1: pro
 
 #if USE_PRODUCTION_API
   const char* API_BASE_URL = "https://daily-task-checker.vercel.app/api";
@@ -21,7 +22,7 @@ const char* password = "42r797a43a58";
 #endif
 
 // --- Device ID Setting ---
-const char* DEVICE_ID = "M5AtomMatrixTest";
+const char* DEVICE_ID = "M5AtomMatrix_1";
 
 // --- Display Configuration ---
 const int DISPLAY_WIDTH = 5;
@@ -194,18 +195,12 @@ void loop() {
         Serial.println("API Update successful (from API task)");
         currentState = DeviceState::EFFECT_SUCCESS;
         startSuccessEffect();
-        // errorRetryAttemptCount can be reset on success if desired,
-        // though it's primarily reset when a new sequence begins.
-        // errorRetryAttemptCount = 0; 
+        errorRetryAttemptCount = 0;
       } else {
-        Serial.println("API Update failed (from API task). Entering ERROR_RETRYING.");
+        Serial.println("API Update failed (from API task)");
         currentState = DeviceState::ERROR_RETRYING;
-        // DO NOT reset errorRetryAttemptCount here. It's reset when a new API sequence
-        // is initiated (e.g., by button press or midnight reset) and incremented
-        // by the ERROR_RETRYING state logic.
-        lastApiRetryAttemptTime = currentTime; // Set base time for the first retry interval.
-        // animationStartTime = currentTime; // This is not strictly needed for the new retry logic
-                                         // as drawErrorRetrying doesn't use it.
+        lastApiRetryAttemptTime = currentTime;
+        animationStartTime = currentTime;
       }
     }
     apiResultReceived = false;
@@ -217,18 +212,17 @@ void loop() {
     if (currentState == DeviceState::TASK_PENDING) {
       newTargetTaskState = true; // DONE
       apiRequestPending = true;
-      errorRetryAttemptCount = 0; // Reset retry counter for new API update sequence
+      errorRetryAttemptCount = 0;
       currentState = DeviceState::API_REQUEST_PENDING;
       Serial.println("Requesting API to set task to DONE.");
     } else if (currentState == DeviceState::TASK_COMPLETED) {
       newTargetTaskState = false; // NOT_DONE
       apiRequestPending = true;
-      errorRetryAttemptCount = 0; // Reset retry counter for new API update sequence
+      errorRetryAttemptCount = 0;
       currentState = DeviceState::API_REQUEST_PENDING;
       Serial.println("Requesting API to set task to PENDING.");
     } else if (currentState == DeviceState::ERROR_FAILED || currentState == DeviceState::ERROR_RETRYING) {
       Serial.println("Attempting to recover from error...");
-      // errorRetryAttemptCount is NOT reset here for a recovery attempt.
       DeviceState stateBeforeRecoveryAttempt = currentState;
 
       if (ensureWiFiConnected()) {
@@ -283,7 +277,7 @@ void loop() {
         Serial.println("Midnight reset! Setting task to PENDING.");
         newTargetTaskState = false;
         apiRequestPending = true;
-        errorRetryAttemptCount = 0; // Reset retry counter for new API update sequence
+        errorRetryAttemptCount = 0;
         currentState = DeviceState::API_REQUEST_PENDING;
         midnightResetExecuted = true;
         lastResetDay = currentDay;
@@ -346,8 +340,12 @@ bool updateTaskOnApi(const char* deviceId, bool isCompleted) {
   Serial.print("API POST URL: ");
   Serial.println(apiUrl);
 
-  http.begin(apiUrl);
-  http.addHeader("Content-Type", "application/json");
+  #if USER_PRODUCTION_API
+    http.begin(apiUrl, isrg_root_x1_pem);
+  #else
+    http.begin(apiUrl);
+  #endif
+    http.addHeader("Content-Type", "application/json");
 
   StaticJsonDocument<200> jsonDoc;
   jsonDoc["deviceId"] = deviceId;
@@ -411,7 +409,12 @@ bool getInitialTaskState(const char* deviceId, bool &isCompletedResult) {
   Serial.print("API GET URL: ");
   Serial.println(apiUrl);
 
-  http.begin(apiUrl);
+  #if USER_PRODUCTION_API
+    http.begin(apiUrl, isrg_root_x1_pem);
+  #else
+    http.begin(apiUrl);
+  #endif
+
   int httpResponseCode = http.GET();
   bool success = false;
 
