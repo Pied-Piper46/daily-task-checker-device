@@ -6,23 +6,7 @@
 #include <WiFiUdp.h>
 #include <time.h>
 #include "certificates.h"
-
-// --- WiFi Setting ---
-const char* ssid = "elecom-29fffc";
-const char* password = "42r797a43a58";
-
-// --- API Setting ---
-#define USE_PRODUCTION_API 1 // 0: dev, 1: pro
-
-#if USE_PRODUCTION_API
-  const char* API_BASE_URL = "https://daily-task-checker.vercel.app/api";
-  // TODO: route authentication
-#else
-  const char* API_BASE_URL = "http://192.168.1.35:3000/api";
-#endif
-
-// --- Device ID Setting ---
-const char* DEVICE_ID = "M5AtomMatrix_1";
+#include "config.h"
 
 // --- Display Configuration ---
 const int DISPLAY_WIDTH = 5;
@@ -428,12 +412,12 @@ bool getInitialTaskState(const char* deviceId, bool &isCompletedResult) {
       Serial.print("deserializeJson() failed: ");
       Serial.println(error.c_str());
     } else {
-      if (jsonDoc.containsKey("status")) {
-        String status = jsonDoc["status"].as<String>();
+      if (jsonDoc.containsKey("currentStatus")) {
+        String status = jsonDoc["currentStatus"].as<String>();
         isCompletedResult = (status == "DONE");
         success = true;
       } else {
-        Serial.println("API GET: 'status' field not found in response.");
+        Serial.println("API GET: 'currentStatus' field not found in response.");
       }
     }
   } else {
